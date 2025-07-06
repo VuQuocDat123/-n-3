@@ -1,0 +1,189 @@
+esphome:
+  name: room
+  friendly_name: room
+
+esp8266:
+  board: esp01_1m
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "aqJAxj8ZnJWAmNggQwpltcPLxiK70VgES1PKMQ331po="
+
+ota:
+  - platform: esphome
+    password: "04689f84e34860ca7a9fabe9adae1cb0"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Room Fallback Hotspot"
+    password: "6FXd7kIpU6Pq"
+
+captive_portal:
+# ==== I2C + DS3231/DS1307 ====
+i2c:
+  sda: GPIO4
+  scl: GPIO5
+
+time:
+  - platform: ds1307
+    id: ds_time
+
+# ==== Cảm biến nhiệt độ DS18B20 (GPIO12) ====
+one_wire:
+  - platform: gpio
+    pin: GPIO12
+
+sensor:
+  - platform: dallas_temp
+    name: "Nhiệt độ phòng"
+    id: temp_sensor
+    update_interval: 10s
+
+    on_value:
+      then:
+        - lambda: |-
+            float temp = x;
+            float t_on = id(temp_threshold_on).state;
+            float t_off = id(temp_threshold_off).state;
+            static bool fan_on = false;
+
+            if (!fan_on && temp >= t_on) {
+              id(relay1).turn_on();
+              fan_on = true;
+            } else if (fan_on && temp <= t_off) {
+              id(relay1).turn_off();
+              fan_on = false;
+            }
+
+# ==== Đèn LED WS2812 ====
+light:
+  - platform: neopixelbus
+    type: GRB
+    variant: WS2812
+    pin: GPIO2
+    num_leds: 60
+    name: "WS2812 LED"
+    id: ws_led
+
+# ==== Relay quạt ====
+switch:
+  - platform: gpio
+    name: "Relay 1"
+    pin: GPIO0
+    id: relay1
+    inverted: false
+
+# ==== Ngưỡng & Giờ bật/tắt đèn/quạt ====
+number:
+  # Đèn LED
+  - platform: template
+    name: "Giờ bật đèn"
+    id: led_hour_on
+    optimistic: true
+    min_value: 0
+    max_value: 23
+    step: 1
+
+  - platform: template
+    name: "Giờ tắt đèn"
+    id: led_hour_off
+    optimistic: true
+    min_value: 0
+    max_value: 23
+    step: 1
+
+  # Quạt
+  - platform: template
+    name: "Giờ bật quạt"
+    id: fan_hour_on
+    optimistic: true
+    min_value: 0
+    max_value: 23
+    step: 1
+
+  - platform: template
+    name: "Giờ tắt quạt"
+    id: fan_hour_off
+    optimistic: true
+    min_value: 0
+    max_value: 23
+    step: 1
+
+  # Ngưỡng nhiệt độ
+  - platform: template
+    name: "Ngưỡng bật quạt"
+    id: temp_threshold_on
+    optimistic: true
+    min_value: 20
+    max_value: 50
+    step: 0.5
+
+  - platform: template
+    name: "Ngưỡng tắt quạt"
+    id: temp_threshold_off
+    optimistic: true
+    min_value: 18
+    max_value: 49
+    step: 0.5
+
+# ==== Kiểm tra giờ mỗi phút để điều khiển đèn và quạt ====
+interval:
+  - interval: 10s
+    then:
+      - lambda: |-
+          auto now = id(ds_time).now();
+          int hour_now = now.hour;
+
+          // Điều khiển đèn
+          int led_on = (int)id(led_hour_on).state;
+          int led_off = (int)id(led_hour_off).state;
+
+          if (led_on < led_off) {
+            if (hour_now >= led_on && hour_now < led_off) {
+              id(ws_led).turn_on();
+            } else {
+              id(ws_led).turn_off();
+            }
+          } else {
+            if (hour_now >= led_on || hour_now < led_off) {
+              id(ws_led).turn_on();
+            } else {
+              id(ws_led).turn_off();
+            }
+          }
+
+          // Điều khiển quạt
+          int fan_on = (int)id(fan_hour_on).state;
+          int fan_off = (int)id(fan_hour_off).state;
+
+          if (fan_on < fan_off) {
+            if (hour_now >= fan_on && hour_now < fan_off) {
+              id(relay1).turn_on();
+            } else {
+              id(relay1).turn_off();
+            }
+          } else {
+            if (hour_now >= fan_on || hour_now < fan_off) {
+              id(relay1).turn_on();
+            } else {
+              id(relay1).turn_off();
+            }
+          }
+text_sensor:
+  - platform: template
+    name: "Giờ hiện tại"
+    id: current_time_str
+    update_interval: 10s
+    lambda: |-
+      auto now = id(ds_time).now();
+      char buffer[20];
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", now.hour, now.minute, now.second);
+      return std::string(buffer);
